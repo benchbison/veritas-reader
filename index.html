@@ -455,28 +455,69 @@
     -webkit-user-select: none;
   }
 
-  /* The column container — width is N * viewport widths */
+  /* The column strip — translates to show correct page */
   .reader-columns {
     position: absolute;
     top: 0; left: 0;
     height: 100%;
-    display: flex;
     will-change: transform;
-    /* transition set by JS for hard cut (none) or slide */
   }
 
-  /* Each page column */
-  .reader-col {
-    flex-shrink: 0;
+  /* The single paginated content div — spans all CSS columns */
+  #paginated-content {
+    display: block;
     height: 100%;
     overflow: hidden;
-    padding: var(--page-pad-v) var(--page-pad-h);
-    box-sizing: border-box;
-    background: var(--paper);
-    font-family: var(--font-body);
-    font-size: var(--font-size);
-    line-height: var(--line-height);
+    /* column-width and padding set dynamically in JS */
+  }
+
+  /* Typography inside paginated content */
+  #paginated-content h1, #paginated-content h2, #paginated-content h3 {
+    font-family: var(--font-display);
     color: var(--ink);
+    margin: 0.8em 0 0.4em;
+    font-weight: 600;
+    line-height: 1.3;
+    break-after: avoid;
+    -webkit-column-break-after: avoid;
+  }
+  #paginated-content h1 { font-size: 1.5em; }
+  #paginated-content h2 { font-size: 1.2em; font-weight: 400; font-style: italic; }
+  #paginated-content h3 { font-size: 1.05em; }
+  #paginated-content p {
+    margin-bottom: 0.6em;
+    text-align: justify;
+    hyphens: auto;
+    -webkit-hyphens: auto;
+    orphans: 2; widows: 2;
+  }
+  #paginated-content p + p { text-indent: 1.4em; margin-top: 0; }
+  #paginated-content img {
+    max-width: 100%; height: auto;
+    display: block; margin: 1em auto;
+    break-inside: avoid;
+    -webkit-column-break-inside: avoid;
+  }
+  #paginated-content blockquote {
+    border-left: 3px solid var(--accent);
+    padding-left: 1em; margin: 1em 0;
+    color: var(--ink-light); font-style: italic;
+    break-inside: avoid;
+  }
+  #paginated-content a { color: var(--accent); text-decoration: none; }
+
+  /* Highlight styles in paginated content */
+  #paginated-content .highlight { cursor: pointer; border-radius: 2px; }
+  #paginated-content .hl-yellow { background: rgba(255,213,79,0.45); border-bottom: 1px solid rgba(255,193,7,0.6); }
+  #paginated-content .hl-red    { background: rgba(211,87,87,0.28);  border-bottom: 1px solid rgba(211,87,87,0.5); }
+  #paginated-content .hl-green  { background: rgba(76,175,80,0.28);  border-bottom: 1px solid rgba(76,175,80,0.5); }
+  #paginated-content .hl-blue   { background: rgba(66,133,244,0.28); border-bottom: 1px solid rgba(66,133,244,0.5); }
+  #paginated-content .search-highlight { background: rgba(184,134,11,0.35); border-radius: 2px; }
+  #paginated-content .search-highlight.current { background: rgba(139,58,26,0.55); color: var(--paper); }
+
+  /* Keep reader-col class for backward compat with annotation/search code */
+  .reader-col {
+    display: contents;
   }
 
   /* Tap zones — invisible overlays left/right thirds */
@@ -2455,83 +2496,10 @@ let autoScrollActive = false;
 let autoScrollInterval = null;
 let autoScrollPx = 40;
 
-// Measure a single page worth of content using a hidden probe element
-function paginateChapterHtml(html, chTitle, stageW, stageH, padV, padH) {
-  const usableH = stageH - padV * 2;
-  const usableW = stageW - padH * 2;
-
-  // Create probe div matching exact column dimensions
-  const probe = document.createElement('div');
-  probe.style.cssText = `
-    position: fixed; left: -9999px; top: 0;
-    width: ${usableW}px;
-    font-family: var(--font-body, 'Crimson Pro', Georgia, serif);
-    font-size: ${getComputedStyle(document.documentElement).getPropertyValue('--font-size') || '19px'};
-    line-height: ${getComputedStyle(document.documentElement).getPropertyValue('--line-height') || '1.75'};
-    color: var(--ink);
-    overflow: visible;
-    word-wrap: break-word;
-    hyphens: auto;
-    -webkit-hyphens: auto;
-  `;
-  document.body.appendChild(probe);
-
-  // Parse HTML into block-level nodes
-  const tmp = document.createElement('div');
-  tmp.innerHTML = (chTitle ? `<div class="chapter-header">${escapeHtml(chTitle)}</div>` : '') + (html || '');
-  const nodes = Array.from(tmp.childNodes);
-
-  const resultPages = [];
-  let currentNodes = [];
-  let currentH = 0;
-
-  function flushPage() {
-    if (currentNodes.length === 0) return;
-    const div = document.createElement('div');
-    currentNodes.forEach(n => div.appendChild(n.cloneNode(true)));
-    resultPages.push(div.innerHTML);
-    currentNodes = [];
-    currentH = 0;
-  }
-
-  nodes.forEach(node => {
-    if (node.nodeType === Node.TEXT_NODE) {
-      const t = node.textContent.trim();
-      if (!t) return;
-      const p = document.createElement('p');
-      p.textContent = t;
-      probe.innerHTML = '';
-      probe.appendChild(p);
-      const h = probe.offsetHeight;
-      if (currentH + h > usableH && currentH > 0) flushPage();
-      currentNodes.push(p);
-      currentH += h;
-      return;
-    }
-    // Element node — measure it
-    probe.innerHTML = '';
-    probe.appendChild(node.cloneNode(true));
-    const h = probe.offsetHeight;
-
-    if (h >= usableH) {
-      // Node taller than page (e.g. big image) — put on its own page
-      if (currentH > 0) flushPage();
-      currentNodes.push(node.cloneNode(true));
-      flushPage();
-    } else if (currentH + h > usableH && currentH > 0) {
-      flushPage();
-      currentNodes.push(node.cloneNode(true));
-      currentH = h;
-    } else {
-      currentNodes.push(node.cloneNode(true));
-      currentH += h;
-    }
-  });
-  flushPage();
-
-  document.body.removeChild(probe);
-  return resultPages.length > 0 ? resultPages : [''];
-}
+// ── CSS COLUMN PAGINATION ──
+// Instead of measuring nodes one by one, we use CSS column-count to let the
+// browser paginate natively. One wide div with column-count=N, each column
+// is exactly stageW wide. We then just track which column index the user is on.
 
 async function loadChapter(idx, targetPage) {
   if (!chapters[idx]) return;
@@ -2554,68 +2522,120 @@ async function loadChapter(idx, targetPage) {
     return;
   }
 
-  // Show loading briefly for long chapters
   const loading = document.getElementById('reader-loading');
   loading.style.display = 'flex';
 
-  // Defer to next frame so loading spinner paints
-  await new Promise(r => setTimeout(r, 16));
+  // Yield so spinner renders before we do layout work
+  await new Promise(r => requestAnimationFrame(r));
+  await new Promise(r => requestAnimationFrame(r));
 
   const stage = document.getElementById('reader-stage');
   const stageW = stage.offsetWidth;
   const stageH = stage.offsetHeight;
-  const style = getComputedStyle(document.documentElement);
-  const padV = parseInt(style.getPropertyValue('--page-pad-v')) || 52;
-  const padH = parseInt(style.getPropertyValue('--page-pad-h')) || 48;
+  const cols  = document.getElementById('reader-columns');
 
-  // Paginate
-  const pageHtmls = paginateChapterHtml(ch.html, ch.title, stageW, stageH, padV, padH);
-
-  // Build pages array entry for this chapter
-  pages = pageHtmls.map((html, i) => ({ html, chapterIdx: idx, pageInChapter: i, totalInChapter: pageHtmls.length }));
-
-  // Restore highlights and search in each page html
-  // (applied after render via restoreHighlights scoped to each col)
-
-  renderColumns(pages, targetPage || 0);
-  loading.style.display = 'none';
-
-  document.getElementById('toolbar-title').textContent = currentBook?.title || '';
-  updatePageIndicator();
-  autoHideToolbar();
-}
-
-function renderColumns(pageList, startIdx) {
-  const stage = document.getElementById('reader-stage');
-  const stageW = stage.offsetWidth;
-  const cols = document.getElementById('reader-columns');
+  // Build the CSS-columns container
   cols.innerHTML = '';
   cols.style.transition = 'none';
-  cols.style.width = (pageList.length * stageW) + 'px';
+  cols.style.transform  = 'translateX(0)';
+  cols.style.width      = ''; // let it size naturally first
 
-  pageList.forEach((pg, i) => {
-    const col = document.createElement('div');
-    col.className = 'reader-col';
-    col.style.width = stageW + 'px';
-    col.id = 'col-' + i;
-    col.innerHTML = pg.html;
-    cols.appendChild(col);
-  });
+  const colStyle = getComputedStyle(document.documentElement);
+  const padV = parseInt(colStyle.getPropertyValue('--page-pad-v')) || 52;
+  const padH = parseInt(colStyle.getPropertyValue('--page-pad-h')) || 48;
+  const fontSize   = colStyle.getPropertyValue('--font-size').trim()   || '19px';
+  const lineHeight = colStyle.getPropertyValue('--line-height').trim() || '1.75';
+  const fontFamily = colStyle.getPropertyValue('--font-body').trim()   || "'Crimson Pro', Georgia, serif";
 
-  currentPageIdx = Math.max(0, Math.min(startIdx, pageList.length - 1));
-  jumpToPage(currentPageIdx, false);
+  // Single content div that spans all CSS columns
+  const contentDiv = document.createElement('div');
+  contentDiv.id = 'paginated-content';
+  contentDiv.style.cssText = `
+    height: ${stageH}px;
+    column-width: ${stageW}px;
+    column-gap: 0px;
+    column-fill: auto;
+    padding: ${padV}px ${padH}px;
+    box-sizing: border-box;
+    overflow: hidden;
+    font-family: ${fontFamily};
+    font-size: ${fontSize};
+    line-height: ${lineHeight};
+    color: var(--ink);
+    word-wrap: break-word;
+    hyphens: auto;
+    -webkit-hyphens: auto;
+    background: var(--paper);
+  `;
 
-  // Restore highlights across all cols
+  // Chapter header + content
+  const chapterHeader = ch.title
+    ? `<div class="chapter-header">${escapeHtml(ch.title)}</div>`
+    : '';
+  contentDiv.innerHTML = chapterHeader + (ch.html || '');
+
+  cols.appendChild(contentDiv);
+
+  // Measure how many columns the browser created
+  // We need at least one frame for layout to complete
+  await new Promise(r => requestAnimationFrame(r));
+
+  const totalWidth    = contentDiv.scrollWidth;
+  const numPages      = Math.max(1, Math.round(totalWidth / stageW));
+
+  // Now set the strip to the correct total width
+  cols.style.width = (numPages * stageW) + 'px';
+  contentDiv.style.width = (numPages * stageW) + 'px';
+
+  // Build lightweight pages metadata (no per-page HTML — one shared DOM)
+  pages = Array.from({ length: numPages }, (_, i) => ({
+    html: '',           // not used in CSS-columns mode
+    chapterIdx: idx,
+    pageInChapter: i,
+    totalInChapter: numPages
+  }));
+
+  currentPageIdx = Math.max(0, Math.min(targetPage || 0, numPages - 1));
+  // Snap to page without animation
+  cols.style.transition = 'none';
+  cols.style.transform  = `translateX(${-currentPageIdx * stageW}px)`;
+
+  // Restore highlights and search
   setTimeout(() => {
-    document.querySelectorAll('.reader-col').forEach(col => {
-      restoreHighlightsInEl(col);
-    });
-    // Re-apply search
+    restoreHighlightsInEl(contentDiv);
     const searchVal = document.getElementById('reader-search-input')?.value?.trim();
     if (searchActive && searchVal && searchVal.length >= 2) {
       setTimeout(() => buildSearchMatches(searchVal), 50);
     }
   }, 50);
+
+  loading.style.display = 'none';
+  document.getElementById('toolbar-title').textContent = currentBook?.title || '';
+  updatePageIndicator();
+  autoHideToolbar();
+}
+
+// jumpToPage — translates the single content strip
+function jumpToPage(idx, animate) {
+  const stage = document.getElementById('reader-stage');
+  const cols  = document.getElementById('reader-columns');
+  const w     = stage.offsetWidth;
+  currentPageIdx = Math.max(0, Math.min(idx, pages.length - 1));
+  cols.style.transition = animate ? 'transform 0.15s ease' : 'none';
+  cols.style.transform  = `translateX(${-currentPageIdx * w}px)`;
+  // Also scroll the content div so CSS columns align
+  const content = document.getElementById('paginated-content');
+  if (content) content.style.columnWidth = w + 'px';
+  updatePageIndicator();
+  if (currentBook && readingStats[currentBook.id]) {
+    readingStats[currentBook.id].page = currentPageIdx;
+    saveStats();
+  }
+}
+
+// renderColumns kept as stub — CSS approach doesn't use it but other code may call it
+function renderColumns(pageList, startIdx) {
+  // no-op in CSS column mode — loadChapter handles everything
 }
 
 function jumpToPage(idx, animate) {
@@ -2836,7 +2856,7 @@ function onSelectionChange() {
   if (text.length < 3) { dismissPopup(); return; }
 
   // Must be inside a reader column
-  const cols = document.querySelectorAll('.reader-col');
+  const cols = document.querySelectorAll('#paginated-content, .reader-col');
   const inCol = Array.from(cols).some(col => col.contains(sel.anchorNode));
   if (!inCol) { dismissPopup(); return; }
 
@@ -3055,7 +3075,7 @@ function jumpToHighlight(hlId) {
 function scrollToHighlight(hlId) {
   setTimeout(() => {
     // Find which page/column contains the highlight and jump to it
-    const cols = document.querySelectorAll('.reader-col');
+    const cols = document.querySelectorAll('#paginated-content, .reader-col');
     cols.forEach((col, i) => {
       const el = col.querySelector(`.highlight[data-hl-id="${hlId}"]`);
       if (el) jumpToPage(i, false);
@@ -3066,7 +3086,7 @@ function scrollToHighlight(hlId) {
 // Re-apply saved highlights after chapter load
 function restoreHighlights() {
   // Called after chapter load — applies to all rendered columns
-  document.querySelectorAll('.reader-col').forEach(col => restoreHighlightsInEl(col));
+  document.querySelectorAll('#paginated-content, .reader-col').forEach(col => restoreHighlightsInEl(col));
 }
 
 function restoreHighlightsInEl(root) {
@@ -3171,7 +3191,7 @@ function exportHighlights(format) {
 // ── BOOKMARKS ──
 async function addBookmark() {
   if (!currentBook) return;
-  const content = document.getElementById('col-' + currentPageIdx) || document.querySelector('.reader-col');
+  const content = document.getElementById('col-' + currentPageIdx) || document.getElementById('paginated-content') || document.querySelector('.reader-col');
   const sel = window.getSelection();
   let snippet = '';
   if (sel && sel.toString().trim()) {
@@ -3444,7 +3464,7 @@ function setVoice(idx) {
 
 function getSentences() {
   // Read all columns in order for continuous TTS through the chapter
-  const cols = document.querySelectorAll('.reader-col');
+  const cols = document.querySelectorAll('#paginated-content, .reader-col');
   if (!cols.length) return [];
   const text = Array.from(cols).map(c => c.innerText || c.textContent || '').join(' ');
   return text.match(/[^.!?…]+[.!?…]+["']?/g) || [text];
@@ -3622,7 +3642,7 @@ function onSearchKey(e) {
 }
 
 function buildSearchMatches(query) {
-  const allCols = document.querySelectorAll('.reader-col');
+  const allCols = document.querySelectorAll('#paginated-content, .reader-col');
   if (!allCols.length) return;
   const lq = query.toLowerCase();
 
@@ -3844,7 +3864,7 @@ function setPageWidth(v) {
 function setFont(el, family) {
   document.querySelectorAll('.font-option').forEach(o => o.classList.remove('selected'));
   el.classList.add('selected');
-  document.querySelectorAll('.reader-col').forEach(col => {
+  document.querySelectorAll('#paginated-content, .reader-col').forEach(col => {
     col.style.fontFamily = `'${family}', Georgia, serif`;
   });
   // Store preference for new chapters
