@@ -480,23 +480,41 @@
   }
 
   /* Tap zones — invisible overlays left/right thirds */
+  /* Tap zones — narrow on desktop, wide on touch */
   .tap-zone {
     position: absolute;
     top: 0;
     height: 100%;
-    width: 33%;
     z-index: 5;
+    /* On desktop: thin clickable strip at edges */
+    width: 60px;
     cursor: pointer;
+    /* Don't block text selection or middle content */
   }
   #tap-prev { left: 0; }
   #tap-next { right: 0; }
-  /* Middle third = show/hide toolbar on tap */
+  /* Middle zone — only for toolbar toggle, doesn't block content on desktop */
   #tap-middle {
-    left: 33%; width: 34%;
+    left: 60px;
+    right: 60px;
+    width: auto;
     position: absolute;
     top: 0; height: 100%;
-    z-index: 5;
-    cursor: pointer;
+    z-index: 4;
+    pointer-events: none; /* invisible on desktop — toolbar auto-hides anyway */
+    cursor: default;
+  }
+
+  /* On touch devices: expand tap zones to full thirds */
+  @media (hover: none) and (pointer: coarse) {
+    .tap-zone { width: 33%; }
+    #tap-prev { left: 0; }
+    #tap-next { right: 0; }
+    #tap-middle {
+      left: 33%; right: 33%; width: 34%;
+      pointer-events: auto;
+      cursor: pointer;
+    }
   }
 
   /* Page footer — shown inside each column at bottom */
@@ -2433,6 +2451,9 @@ let currentPageIdx = 0;
 let toolbarVisible = true;
 let toolbarTimeout = null;
 let paginationWorking = false;
+let autoScrollActive = false;
+let autoScrollInterval = null;
+let autoScrollPx = 40;
 
 // Measure a single page worth of content using a hidden probe element
 function paginateChapterHtml(html, chTitle, stageW, stageH, padV, padH) {
@@ -2728,6 +2749,11 @@ function initSwipe() {
 }
 
 // ── AUTO-SCROLL (page-based) ──
+function toggleAutoScroll() {
+  if (autoScrollActive) stopAutoScroll();
+  else startAutoScroll();
+}
+
 function startAutoScroll() {
   autoScrollActive = true;
   document.getElementById('autoscroll-btn').classList.add('active');
@@ -3417,9 +3443,11 @@ function setVoice(idx) {
 }
 
 function getSentences() {
+  // Read all columns in order for continuous TTS through the chapter
   const cols = document.querySelectorAll('.reader-col');
+  if (!cols.length) return [];
   const text = Array.from(cols).map(c => c.innerText || c.textContent || '').join(' ');
-  return text.match(/[^.!?]+[.!?]+/g) || [text];
+  return text.match(/[^.!?…]+[.!?…]+["']?/g) || [text];
 }
 
 function toggleTTS() {
